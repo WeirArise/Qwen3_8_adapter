@@ -35,6 +35,8 @@ behaviour is covered without instantiating a 2.4T-parameter model.
 
 import unittest
 
+from torch import nn
+
 from msmodelslim.model.qwen3_5_moe_text.model_shim import (
     BACKBONE_ATTRIBUTE,
     attach_language_model_alias,
@@ -203,6 +205,59 @@ class TestFailureBeingFixed(unittest.TestCase):
 class TestBackboneAttributeName(unittest.TestCase):
     def test_constant_matches_the_transformers_attribute(self):
         self.assertEqual(BACKBONE_ATTRIBUTE, "language_model")
+
+
+class TestTorchModuleSafety(unittest.TestCase):
+    """The alias must not register the backbone as a child of itself.
+
+    A real `nn.Module` is used here rather than a stand-in, because the hazard
+    lives in `nn.Module.__setattr__`: assigning a module to an attribute of
+    itself puts it into its own `_modules`, and every tree walk that lacks a
+    visited-set then recurses until the interpreter gives up.
+    """
+
+    def _module(self):
+        class _Backbone(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = nn.ModuleList([nn.Linear(2, 2), nn.Linear(2, 2)])
+                self.embed_tokens = nn.Embedding(4, 2)
+
+        class _Wrapper(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = _Backbone()
+
+        return _Wrapper()
+
+    def test_alias_is_not_registered_as_a_child_module(self):
+        model = self._module()
+        attach_language_model_alias(model)
+        self.assertNotIn("language_model", model.model._modules)
+
+    def test_module_tree_is_not_duplicated(self):
+        model = self._module()
+        before = len(list(model.named_modules()))
+        attach_language_model_alias(model)
+        self.assertEqual(len(list(model.named_modules())), before)
+
+    def test_state_dict_is_unaffected(self):
+        model = self._module()
+        before = set(model.state_dict().keys())
+        attach_language_model_alias(model)
+        self.assertEqual(set(model.state_dict().keys()), before)
+
+    def test_tree_walks_do_not_recurse(self):
+        model = self._module()
+        attach_language_model_alias(model)
+        model.eval()          # nn.Module._apply walks children()
+        model.to("cpu")
+        list(model.parameters())
+
+    def test_get_submodule_still_resolves_through_the_alias(self):
+        model = self._module()
+        attach_language_model_alias(model)
+        self.assertIs(model.get_submodule("model.language_model.layers.0"), model.model.layers[0])
 
 
 if __name__ == "__main__":

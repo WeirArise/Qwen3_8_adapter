@@ -132,6 +132,13 @@ def attach_language_model_alias(model: Any) -> GraphReport:
     if not hasattr(inner, "layers"):
         return report
 
-    setattr(inner, BACKBONE_ATTRIBUTE, inner)
+    # Bypass nn.Module.__setattr__, which would register the backbone into its
+    # own `_modules` as a child of itself.  A self-registration makes
+    # state_dict()/named_modules()/eval() recurse until the interpreter runs out
+    # of stack.  Setting a plain attribute is also the semantically correct
+    # choice: the alias is a second *path* to objects that already exist, not a
+    # new submodule, so it must not appear in the module tree or in state_dict.
+    # getattr and get_submodule() both still see it.
+    object.__setattr__(inner, BACKBONE_ATTRIBUTE, inner)
     report.applied = True
     return report
