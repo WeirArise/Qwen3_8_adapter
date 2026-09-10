@@ -89,6 +89,31 @@ class Qwen3_5MoeTextModelAdapter(Qwen3_5ModelAdapter):
                 "Checkpoint '%s' already uses the nested layout; the text-only shim was not needed.",
                 model_type,
             )
+        self._adopt_processor_as_tokenizer()
+
+    def _adopt_processor_as_tokenizer(self) -> None:
+        """Recover the tokenizer from a text-only checkpoint.
+
+        The shared constructor does `getattr(self._processor, "tokenizer", None)`.
+        For a multimodal checkpoint `AutoProcessor` returns a wrapper that owns a
+        tokenizer, so the attribute is there.  For a text-only one there is no
+        processor config, and `AutoProcessor` returns the tokenizer itself --
+        which has no `.tokenizer`, leaving `self._tokenizer` as None while the
+        `tokenizer` property and the inference paths that read it expect one.
+
+        In that case the processor *is* the tokenizer, so adopt it.  Verified
+        against a checkpoint laid out like the published one: without this the
+        property yields None.
+        """
+        if self._tokenizer is not None:
+            return
+        if hasattr(self._processor, "tokenizer"):
+            return
+        self._tokenizer = self._processor
+        get_logger().info(
+            "Text-only checkpoint: adopted %s as the tokenizer (no processor wrapper).",
+            type(self._processor).__name__,
+        )
 
     # ------------------------------------------------------------------ #
     # Graph

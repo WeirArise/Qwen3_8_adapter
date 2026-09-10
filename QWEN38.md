@@ -83,11 +83,36 @@ model_adapter.py ~110 行   仅纯文本真实差异的覆盖
 | 注册一致性 | 通过 | 断言 `config.ini` 的 loader 路径可导入、指向本适配器、版本下界真的提供所需类 |
 | 上游回归 | **与纯净基线逐字相同** | `test/cases/format` + `test/cases/core`：2 failed / 1404 passed / 43 skipped / 1 error（3 个失败为上游预先存在的环境性问题） |
 | **位置编码正确性** | **通过（真实前向）** | 用小尺寸同构模型跑真实前向，对比「模型自动推断位置」与「适配器计算的位置」—— **逐元素完全相同**，覆盖无 padding / 右 padding / 左 padding / batch=1 四种情况 |
+| **逐层加载路径** | **通过（小尺寸真实 checkpoint）** | 构造符合官方布局的 checkpoint（相同文件集、相同权重键名、相同扁平 config），跑通 `_create_model_instance` → 骨干别名解析 → `_load_decoder_if_not_exist` |
 
 ```
-pytest test/cases/model/qwen3_5_moe_text/          -> 75 passed, 97 subtests
+pytest test/cases/model/qwen3_5_moe_text/          -> 84 passed, 99 subtests
 pytest test/cases/format test/cases/core           -> 与官方基线逐字相同
 ```
+
+### 验证过程中拿到的两个关键事实
+
+**1. 真实 checkpoint 的权重键名（来自官方 287,119 条索引）**
+
+| 命名形态 | 数量 |
+|---|---|
+| 含 `model.language_model` | **0** |
+| 以 `model.layers.` 开头 | **284,027** |
+
+真实 checkpoint 用**纯文本命名** `model.embed_tokens` / `model.layers.N`，而上游适配器构造的是
+`model.language_model.layers.N`。**所以 `model_shim` 不是“理论上成立”，而是让逐层加载能工作的
+必要条件** —— 实测确认 `get_submodule("model.language_model.layers.0")` 与
+`get_submodule("model.layers.0")` 返回**同一个对象**。
+
+> 注意：直接用 `save_pretrained` 保存的 fixture **不能**暴露这个问题 —— `transformers` 会把键名
+> 重写成多模态拼写。因此测试里的 fixture 显式改回官方命名，并断言不含 `language_model`。
+
+**2. 纯文本 checkpoint 下 `tokenizer` 会变成 None**
+
+共享构造函数是 `getattr(self._processor, "tokenizer", None)`。多模态 checkpoint 下
+`AutoProcessor` 返回一个拥有 tokenizer 的包装器；而纯文本 checkpoint **没有 processor 配置**，
+`AutoProcessor` 直接返回 tokenizer 本身，它没有 `.tokenizer` 属性 → `self._tokenizer` 为 None，
+而 `adapter.tokenizer` 属性被推理侧读取。已修复：无包装器时直接采用 processor 作为 tokenizer。
 
 **位置编码为何能验证**：纯文本主干没有 `get_rope_index`，但验证它的正确性**不需要权重** —— 用
 `Qwen3_5MoeTextConfig` 构造一个小尺寸但结构相同的模型（相同的层模式、MoE 路由、混合注意力、
@@ -102,12 +127,14 @@ pytest test/cases/format test/cases/core           -> 与官方基线逐字相�
 
 **校准前向路径的其余部分没有验证过。** 具体包括：
 
-- 完整模型加载与逐层加载（`init_model` / `generate_decoder_layer`）
-- MoE 专家融合转换（`convert_experts_to_mlp`）
+- MoE 专家融合转换（`convert_experts_to_mlp`）—— 官方 checkpoint 中专家是**逐专家存储**的
+  （47,104 = 92 层 × 512 专家），与转换器预期的融合格式之间的关系未验证
 - 量化处理器本身（`linear_quant`、`flex_awq_ssz` 等）
+- FP8 checkpoint 的处理：官方发布的是 `-FP8` 权重（带 `weight_scale_inv` 块缩放），
+  而 W8A8 实践通常应从 BF16 基底模型出发 —— 两条路径的取舍未实测
 - 两个实践配置的量化范围虽从官方排除清单**反推**，但**未在昇腾硬件上跑过**
 
-这些都需要 2.4T 权重（213 个分片）与昇腾设备，因此：
+这些都需要完整规模权重与昇腾设备，因此：
 
 1. 两个实践配置**故意不声明** `verified_model_types` / `verified_tags` —— 那两个字段的含义是
    "已通过项目验证"，而这里没有。
@@ -122,7 +149,8 @@ pytest test/cases/format test/cases/core           -> 与官方基线逐字相�
 | 2 | 量化前后 PPL / 下游精度 | 同一模型分别加载 FP8 与量化权重，跑 BoolQ / C-Eval / GSM8K，记录 ΔAcc | `TODO` |
 | 3 | 端到端吞吐 | 固定 batch / 序列长度 / 并发，对比 FP8 baseline | `TODO` |
 | 4 | 显存占用 | 权重显存与 KV cache 峰值 | `TODO` |
-| 5 | 逐层加载与 MoE 转换 | 小尺寸模型上跑通 `init_model` / `generate_decoder_layer` | `TODO` |
+| 5 | ~~逐层加载路径~~ | ~~小尺寸模型上跑通 `init_model` / `generate_decoder_layer`~~ | ✅ **已完成** |
+| 6 | MoE 专家融合转换 | 逐专家存储 → 融合格式的转换在小尺寸 checkpoint 上验证 | `TODO` |
 
 ## 5. 快速开始
 
