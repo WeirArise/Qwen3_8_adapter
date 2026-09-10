@@ -1,3 +1,15 @@
+> **本仓库是 [Ascend/msmodelslim](https://gitcode.com/Ascend/msmodelslim) 的二次开发分支，不是官方仓库。**
+>
+> - 上游代码版权归 **Huawei Technologies Co.,Ltd.** 所有，遵循[木兰宽松许可证 v2](./LICENSE)
+> - 本分支在其上新增 **Qwen3.8 系列模型的量化支持**，全部提交位于上游 `master` 之上
+> - ⚠️ 校准前向路径**尚未在昇腾硬件上验证**；本分支不提供任何未实测的精度/性能数字
+>
+> 👉 新增内容、设计说明与**验证状态表**详见 **[QWEN38.md](./QWEN38.md)**
+>
+> 下方正文为**上游项目原文**，介绍的是整个 msModelSlim 工具。
+
+---
+
 <h1 align="center"> MindStudio ModelSlim</h1>
 <div align="center">
   <br />
