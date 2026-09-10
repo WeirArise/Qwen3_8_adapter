@@ -35,10 +35,18 @@ from msmodelslim.model.qwen3_5_moe_text.config_shim import (
     is_text_only_layout,
     normalize_text_only_config,
 )
+from msmodelslim.model.qwen3_5_moe_text.model_shim import (
+    GraphReport,
+    attach_language_model_alias,
+    is_text_only_graph,
+)
 
 __all__ = [
     "LayoutReport",
     "TextOnlyVisionConfig",
     "is_text_only_layout",
     "normalize_text_only_config",
+    "GraphReport",
+    "attach_language_model_alias",
+    "is_text_only_graph",
 ]
