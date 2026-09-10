@@ -136,6 +136,25 @@ msmodelslim quant \
   --config     lab_practice/qwen3_5_moe/qwen3_8_27b_w8a8.yaml
 ```
 
+## 5. 校准数据集
+
+`lab_calib/qwen38_calib.jsonl` 由 `tools/build_calib_dataset.py` **确定性生成**（同 seed 输出可复现），
+共 64 条、7 个领域，其中 **50% 在仓库内合成**（算术 CoT、代码任务、表格推理、指令跟随），
+其余从仓库已收录的公开语料按固定种子重采样。
+
+| 性质 | 值 |
+|---|---|
+| 唯一性 | 64/64，无重复 |
+| 与上游 `mix_calib.jsonl` 的内容重叠 | **0 条** |
+| 合成 CoT 中的算式 | 全部独立复算通过 |
+| 输出字段 | 严格为加载器要求的 `inputs_pretokenized` |
+
+逐域来源、池大小与抽样方式记录在 `lab_calib/qwen38_calib.provenance.json`，便于审计与复现。
+
+```bash
+python tools/build_calib_dataset.py --seed 20260824
+```
+
 ## 6. 本分支的提交
 
 ```bash
@@ -149,6 +168,7 @@ git log --oneline d190c5c3..HEAD
 | `[Fix]` | 别名绕过 `nn.Module` 子模块注册表 |
 | `[Feature]` | 适配器子类 + `config.ini` 注册 |
 | `[Feature]` | 两个 W8A8 实践配置 |
+| `[Feature]` | 可复现的自建校准数据集 |
 
 ## 7. 许可证与致谢
 

@@ -1,0 +1,56 @@
+{
+  "seed": 20260824,
+  "total": 64,
+  "domains": {
+    "zh_mcq": {
+      "count": 12,
+      "origin": "public corpora sampled locally",
+      "sources": [
+        "example/common/ceval.jsonl",
+        "example/common/cn_en.jsonl"
+      ],
+      "pool_size": 145,
+      "selection": "seeded shuffle (seed=20260824), first 12 unused"
+    },
+    "math_cot": {
+      "count": 12,
+      "origin": "synthesised in this repository",
+      "generator": "gen_math_cot"
+    },
+    "prose_zh_en": {
+      "count": 12,
+      "origin": "public corpora sampled locally",
+      "sources": [
+        "example/common/wiki.jsonl",
+        "lab_calib/cn_en.jsonl"
+      ],
+      "pool_size": 222,
+      "selection": "seeded shuffle (seed=20260824), first 12 unused"
+    },
+    "code": {
+      "count": 10,
+      "origin": "synthesised in this repository",
+      "generator": "gen_code"
+    },
+    "en_reading": {
+      "count": 8,
+      "origin": "public corpora sampled locally",
+      "sources": [
+        "lab_calib/boolq.jsonl",
+        "example/common/boolq.jsonl"
+      ],
+      "pool_size": 100,
+      "selection": "seeded shuffle (seed=20260824), first 8 unused"
+    },
+    "structured_reasoning": {
+      "count": 6,
+      "origin": "synthesised in this repository",
+      "generator": "gen_structured_reasoning"
+    },
+    "instruction": {
+      "count": 4,
+      "origin": "synthesised in this repository",
+      "generator": "gen_instruction"
+    }
+  }
+}

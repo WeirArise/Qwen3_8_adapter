@@ -71,4 +71,8 @@ spec:
     - type: "ascendv1_saver"
       part_file_size: 4
   dataset: "calibImages"  # Short name: auto-searches in lab_calib/
+  # Text-only alternative: `qwen38_calib.jsonl`.  The scope above excludes the
+  # whole vision tower, so image calibration cannot influence the quantised
+  # modules directly; it still shapes the activations the tower feeds into the
+  # text side, so the image path is kept as the default until measured.
   default_text: "Describe this image in detail."
