@@ -81,7 +81,9 @@ class TestModelClassSubstitution(unittest.TestCase):
 
 
 class TestTextPositionIds(unittest.TestCase):
-    def test_positions_count_from_zero_without_padding(self):
+    """Convention checks; equivalence to the model is covered in test_position_ids.py."""
+
+    def test_positions_count_from_zero(self):
         adapter = _bare_adapter()
         input_ids = torch.zeros(1, 5, dtype=torch.long)
         mask = torch.ones(1, 5, dtype=torch.long)
@@ -91,22 +93,24 @@ class TestTextPositionIds(unittest.TestCase):
         self.assertEqual(position_ids.tolist(), [[0, 1, 2, 3, 4]])
         self.assertIsNone(rope_deltas)
 
-    def test_padding_is_held_at_the_first_position(self):
+    def test_every_batch_row_gets_its_own_positions(self):
         adapter = _bare_adapter()
-        input_ids = torch.zeros(1, 5, dtype=torch.long)
-        mask = torch.tensor([[0, 0, 1, 1, 1]])
-
-        position_ids, _ = adapter._text_position_ids(input_ids, mask)
-
-        self.assertEqual(position_ids.tolist(), [[1, 1, 0, 1, 2]])
-
-    def test_missing_mask_falls_back_to_a_range(self):
-        adapter = _bare_adapter()
-        input_ids = torch.zeros(1, 3, dtype=torch.long)
+        input_ids = torch.zeros(3, 4, dtype=torch.long)
 
         position_ids, _ = adapter._text_position_ids(input_ids, None)
 
-        self.assertEqual(position_ids.tolist(), [[0, 1, 2]])
+        self.assertEqual(position_ids.shape, (3, 4))
+        self.assertEqual(position_ids.tolist(), [[0, 1, 2, 3]] * 3)
+
+    def test_positions_are_independent_of_the_attention_mask(self):
+        """Matches the model's own inference, which ignores the mask."""
+        adapter = _bare_adapter()
+        input_ids = torch.zeros(1, 5, dtype=torch.long)
+
+        padded, _ = adapter._text_position_ids(input_ids, torch.tensor([[0, 0, 1, 1, 1]]))
+        plain, _ = adapter._text_position_ids(input_ids, torch.ones(1, 5, dtype=torch.long))
+
+        self.assertEqual(padded.tolist(), plain.tolist())
 
 
 class TestVisionIsSkipped(unittest.TestCase):

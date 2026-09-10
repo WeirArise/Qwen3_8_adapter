@@ -82,22 +82,35 @@ model_adapter.py ~110 行   仅纯文本真实差异的覆盖
 | `nn.Module` 安全性 | 通过 | 用真实 `nn.Module` 断言别名未进入 `_modules`、`state_dict()`/`eval()` 不递归 |
 | 注册一致性 | 通过 | 断言 `config.ini` 的 loader 路径可导入、指向本适配器、版本下界真的提供所需类 |
 | 上游回归 | **与纯净基线逐字相同** | `test/cases/format` + `test/cases/core`：2 failed / 1404 passed / 43 skipped / 1 error（3 个失败为上游预先存在的环境性问题） |
+| **位置编码正确性** | **通过（真实前向）** | 用小尺寸同构模型跑真实前向，对比「模型自动推断位置」与「适配器计算的位置」—— **逐元素完全相同**，覆盖无 padding / 右 padding / 左 padding / batch=1 四种情况 |
 
 ```
-pytest test/cases/model/qwen3_5_moe_text/          -> 52 passed, 63 subtests
+pytest test/cases/model/qwen3_5_moe_text/          -> 75 passed, 97 subtests
 pytest test/cases/format test/cases/core           -> 与官方基线逐字相同
 ```
 
+**位置编码为何能验证**：纯文本主干没有 `get_rope_index`，但验证它的正确性**不需要权重** —— 用
+`Qwen3_5MoeTextConfig` 构造一个小尺寸但结构相同的模型（相同的层模式、MoE 路由、混合注意力、
+旋转位置设置），分别用「`position_ids=None`（模型自己推断）」和「适配器的值」跑两次，
+激活值必须一致。整个过程 CPU 上几秒，**因此这个性质进入 CI，而不是只能靠拥有 2.4T checkpoint 的机器**。
+
+实验还纠正了一个错选：`cumsum(attention_mask) - 1` 是左 padding **生成**场景的惯例，
+而本模型的自动推断用的是 `cache_position`（即 `arange`）。用错会在带 padding 的校准批次上
+静默偏移激活值（右 padding 情况下实测最大差 ~3e-1），因此这个选择被测试**钉住**。
+
 ### 4.2 未验证 ⚠️
 
-**校准前向路径没有验证过。** 具体地：
+**校准前向路径的其余部分没有验证过。** 具体包括：
 
-- `Qwen3_5MoeTextModel` 没有 `get_rope_index`，因此位置编码由本分支自行计算（`_text_position_ids`）。**该计算的张量形状与语义是否符合主干 rotary embedding 的期望，只能靠跑真实 checkpoint 确定**，而那需要 2.4T 权重（213 个分片）与昇腾设备。
-- 两个实践配置的量化范围虽然是从官方排除清单**反推**的，但**未在昇腾硬件上跑过**。
+- 完整模型加载与逐层加载（`init_model` / `generate_decoder_layer`）
+- MoE 专家融合转换（`convert_experts_to_mlp`）
+- 量化处理器本身（`linear_quant`、`flex_awq_ssz` 等）
+- 两个实践配置的量化范围虽从官方排除清单**反推**，但**未在昇腾硬件上跑过**
 
-**因此：**
+这些都需要 2.4T 权重（213 个分片）与昇腾设备，因此：
 
-1. 两个实践配置**故意不声明** `verified_model_types` / `verified_tags` —— 那两个字段的含义是"已通过项目验证"，而这里没有。
+1. 两个实践配置**故意不声明** `verified_model_types` / `verified_tags` —— 那两个字段的含义是
+   "已通过项目验证"，而这里没有。
 2. **在 4.3 的实测完成之前，不要用本分支产出对外发布的精度/性能数字。**
 3. 本分支不提供任何未实测的数字。
 
@@ -105,10 +118,11 @@ pytest test/cases/format test/cases/core           -> 与官方基线逐字相�
 
 | # | 指标 | 方法 | 状态 |
 |---|---|---|---|
-| 1 | 位置编码正确性 | 对比 `_text_position_ids` 与主干 rotary embedding 的期望输入；先用小尺寸同构模型验证 | `TODO` |
+| 1 | ~~位置编码正确性~~ | ~~对比自动推断与适配器计算的位置~~ | ✅ **已完成** |
 | 2 | 量化前后 PPL / 下游精度 | 同一模型分别加载 FP8 与量化权重，跑 BoolQ / C-Eval / GSM8K，记录 ΔAcc | `TODO` |
 | 3 | 端到端吞吐 | 固定 batch / 序列长度 / 并发，对比 FP8 baseline | `TODO` |
 | 4 | 显存占用 | 权重显存与 KV cache 峰值 | `TODO` |
+| 5 | 逐层加载与 MoE 转换 | 小尺寸模型上跑通 `init_model` / `generate_decoder_layer` | `TODO` |
 
 ## 5. 快速开始
 

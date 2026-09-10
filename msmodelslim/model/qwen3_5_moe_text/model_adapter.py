@@ -36,19 +36,20 @@ WHAT IS VERIFIED
 * the config shim and the model shim, against the published `config.json` of
   Qwen3.8-2.4T-A95B and against the installed `transformers` class shape;
 * that the backbone alias does not corrupt `nn.Module`'s module tree;
-* the overrides below, which are structural and are asserted by unit tests.
+* the overrides below, which are structural and are asserted by unit tests;
+* **the position ids**, by a real forward pass: a small same-architecture model
+  is built from `Qwen3_5MoeTextConfig` and run twice, once letting the model
+  infer its own positions and once with `_text_position_ids`.  The two are
+  identical bit for bit -- with no padding, with right padding and with left
+  padding.  See `test_position_ids_match_auto_inferred`.
 
 WHAT IS NOT VERIFIED
 --------------------
-The calibration forward path.  `Qwen3_5MoeTextModel` has no `get_rope_index`
-(only the multimodal shell does), so the position ids have to be produced
-differently -- see :meth:`_text_position_ids`.  Whether that yields the tensor
-shape and semantics the backbone's rotary embedding expects can only be settled
-by running the checkpoint, which needs the weights and an Ascend device.  Until
-that has been done this adapter must not be used to produce published accuracy
-numbers.
-
-Status: structural support only.  See README.md for the verification table.
+The rest of the calibration forward path: the full model load, layer-wise
+loading, MoE expert conversion, and the quantisation processors themselves.
+Nothing here has run on Ascend hardware, and the 2.4T checkpoint has not been
+run at all, so no accuracy or throughput figure can be produced from this
+branch.  See README.md for the verification table.
 """
 
 from pathlib import Path
@@ -134,18 +135,21 @@ class Qwen3_5MoeTextModelAdapter(Qwen3_5ModelAdapter):
     # Position ids
     # ------------------------------------------------------------------ #
     def _text_position_ids(self, input_ids: torch.Tensor, attention_mask: Any):
-        """Ordinary left-to-right position ids for a text-only backbone.
+        """Position ids matching the text backbone's own auto-inferred values.
 
         The shared forward path calls `model.model.get_rope_index(...)`, which
-        exists only on the multimodal shell and computes vision-aware mROPE
-        indices.  A text-only checkpoint needs the plain sequence positions, and
-        reports no rope delta.
+        exists only on the multimodal shell.  Its own docstring states the rule
+        for this case: "For pure text sequence, please rely on model's
+        auto-inferred position ids."
 
-        NOTE: unverified against a real checkpoint -- see the module docstring.
+        `Qwen3_5MoeTextModel.forward` infers them from `cache_position`, i.e. a
+        plain `arange` over the sequence -- *not* the `cumsum(attention_mask)`
+        convention used for left-padded generation.  Reproducing the model's own
+        behaviour is what matters here, so this returns `arange`.  Verified
+        forward-pass identical to passing `position_ids=None`, bit for bit, with
+        no padding, with right padding, and with left padding; see
+        `test_position_ids_match_auto_inferred`.
         """
-        if attention_mask is not None:
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-        else:
-            position_ids = torch.arange(input_ids.shape[-1], device=input_ids.device).unsqueeze(0)
-        return position_ids, None
+        del attention_mask  # the model's own inference ignores it; so does this
+        positions = torch.arange(input_ids.shape[-1], device=input_ids.device).unsqueeze(0)
+        return positions.expand(input_ids.shape[0], -1), None
