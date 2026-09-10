@@ -84,9 +84,10 @@ model_adapter.py ~110 行   仅纯文本真实差异的覆盖
 | 上游回归 | **与纯净基线逐字相同** | `test/cases/format` + `test/cases/core`：2 failed / 1404 passed / 43 skipped / 1 error（3 个失败为上游预先存在的环境性问题） |
 | **位置编码正确性** | **通过（真实前向）** | 用小尺寸同构模型跑真实前向，对比「模型自动推断位置」与「适配器计算的位置」—— **逐元素完全相同**，覆盖无 padding / 右 padding / 左 padding / batch=1 四种情况 |
 | **逐层加载路径** | **通过（小尺寸真实 checkpoint）** | 构造符合官方布局的 checkpoint（相同文件集、相同权重键名、相同扁平 config），跑通 `_create_model_instance` → 骨干别名解析 → `_load_decoder_if_not_exist` |
+| **MoE 专家融合转换** | **通过（真实前向）** | `convert_experts_to_mlp` 的输出与原打包 MoE 块**逐元素等价**（最大差 ~9e-11）；gate/up 拆分与 down_proj 携带均**逐元素核对**；无参数遗漏 |
 
 ```
-pytest test/cases/model/qwen3_5_moe_text/          -> 84 passed, 99 subtests
+pytest test/cases/model/qwen3_5_moe_text/          -> 94 passed, 127 subtests
 pytest test/cases/format test/cases/core           -> 与官方基线逐字相同
 ```
 
@@ -127,11 +128,7 @@ pytest test/cases/format test/cases/core           -> 与官方基线逐字相�
 
 **校准前向路径的其余部分没有验证过。** 具体包括：
 
-- MoE 专家融合转换（`convert_experts_to_mlp`）—— 官方 checkpoint 中专家是**逐专家存储**的
-  （47,104 = 92 层 × 512 专家），与转换器预期的融合格式之间的关系未验证
 - 量化处理器本身（`linear_quant`、`flex_awq_ssz` 等）
-- FP8 checkpoint 的处理：官方发布的是 `-FP8` 权重（带 `weight_scale_inv` 块缩放），
-  而 W8A8 实践通常应从 BF16 基底模型出发 —— 两条路径的取舍未实测
 - 两个实践配置的量化范围虽从官方排除清单**反推**，但**未在昇腾硬件上跑过**
 
 这些都需要完整规模权重与昇腾设备，因此：
@@ -150,7 +147,29 @@ pytest test/cases/format test/cases/core           -> 与官方基线逐字相�
 | 3 | 端到端吞吐 | 固定 batch / 序列长度 / 并发，对比 FP8 baseline | `TODO` |
 | 4 | 显存占用 | 权重显存与 KV cache 峰值 | `TODO` |
 | 5 | ~~逐层加载路径~~ | ~~小尺寸模型上跑通 `init_model` / `generate_decoder_layer`~~ | ✅ **已完成** |
-| 6 | MoE 专家融合转换 | 逐专家存储 → 融合格式的转换在小尺寸 checkpoint 上验证 | `TODO` |
+| 6 | ~~MoE 专家融合转换~~ | ~~逐专家存储 → 融合格式的转换验证~~ | ✅ **已完成** |
+
+### 4.4 实测得到的一个关键取舍：用 BF16 基底，不要用 -FP8
+
+拉取两个变体的**官方权重索引**后（287,119 条 vs 1,609 条）发现：
+
+| | `Qwen3.8-2.4T-A95B`（BF16） | `...-FP8` |
+|---|---|---|
+| 权重总数 | 1,609 | 287,119 |
+| 专家存储 | **打包** `mlp.experts.gate_up_proj` / `down_proj` | **逐专家** `mlp.experts.N.{gate,up,down}_proj` |
+| `weight_scale_inv` 块缩放 | 无 | 142,848 |
+
+适配器通过 `_get_state_dict` 读 checkpoint：它**遍历模块自身的参数名**去权重索引里查，
+查不到就**静默跳过**。而模块的参数名是**打包形态的** — 所以：
+
+- **BF16 版匹配** → 专家权重能被正常找到与加载
+- **FP8 版不匹配** → 专家权重全部找不到，随后的 `load_state_dict` 因缺键报错
+
+因此**两个实践配置都应以 BF16 基底模型作为输入**。若确实要从 FP8 checkpoint 出发，需要先做
+FP8 → BF16 的权重转换（上游对 DeepSeek 系有这条路径，Qwen3.8 未验证）。
+
+> 附注：`Qwen3.8-27B` 的 BF16 与 FP8 变体都用 VLM 命名 `model.language_model.*`，与上游预期一致；
+> 差异仅在 FP8 版多出 407 处 `weight_scale_inv`。
 
 ## 5. 快速开始
 
@@ -166,14 +185,15 @@ python -m pytest test/cases/model/qwen3_5_moe_text/ -q
 
 ```bash
 # Qwen3.8-2.4T-A95B（纯文本 MoE，W8A8）
+# 用 BF16 基底，不要用 -FP8 变体（原因见 §4.3）
 msmodelslim quant \
-  --model_path <Qwen/Qwen3.8-2.4T-A95B-FP8 路径> \
+  --model_path <Qwen/Qwen3.8-2.4T-A95B 路径> \
   --save_path  <输出路径> \
   --config     lab_practice/qwen3_5_moe_text/qwen3_8_2_4t_a95b_w8a8.yaml
 
 # Qwen3.8-27B（Dense VLM，W8A8）
 msmodelslim quant \
-  --model_path <Qwen/Qwen3.8-27B-FP8 路径> \
+  --model_path <Qwen/Qwen3.8-27B 路径> \
   --save_path  <输出路径> \
   --config     lab_practice/qwen3_5_moe/qwen3_8_27b_w8a8.yaml
 ```
